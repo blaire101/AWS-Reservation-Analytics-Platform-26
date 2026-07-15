@@ -389,15 +389,6 @@ Resources:
         '--enable-metrics': 'true'
         '--enable-observability-metrics': 'true'
 
-  ManualStartTrigger:
-    Type: AWS::Glue::Trigger
-    Properties:
-      Name: !Sub '${ProjectName}-manual-start'
-      Type: ON_DEMAND
-      WorkflowName: !Ref AnalyticsWorkflow
-      Actions:
-        - JobName: !Ref DwdReservationJob
-        - JobName: !Ref DwdPaidOrderJob
 
   DailyStartTrigger:
     Type: AWS::Glue::Trigger
@@ -451,7 +442,5 @@ Outputs:
     Value: !Ref AnalyticsWorkflow
   DailyStartTriggerName:
     Value: !Ref DailyStartTrigger
-  ManualStartTriggerName:
-    Value: !Ref ManualStartTrigger
   ArtifactBucket:
     Value: !Ref ArtifactBucket

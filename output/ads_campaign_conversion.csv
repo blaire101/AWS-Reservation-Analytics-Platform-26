@@ -1,0 +1,4 @@
+campaign_id,site,channel,reserved_users,paid_users,unconverted_users,conversion_rate
+CAMP100,SG,Facebook,1,0,1,0.0
+CAMP100,SG,Google,1,1,0,1.0
+CAMP100,SG,Direct,1,0,1,0.0

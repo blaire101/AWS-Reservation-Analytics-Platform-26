@@ -1,0 +1,4 @@
+reservation_id,mid,campaign_id,product_id,site,reserve_time,channel,reserve_flag,order_flag,tag_reserved_not_paid,conversion_segment,order_id,order_time
+R001,U001,CAMP100,SKU-PHONE-15,SG,2026-06-28 10:00:00,Google,1,1,0,CONVERTED,O001,2026-07-02 12:00:00
+R003,U002,CAMP100,SKU-PHONE-15,SG,2026-06-29 11:30:00,Facebook,1,0,1,RESERVED_NOT_PAID,,
+R004,U003,CAMP100,SKU-PHONE-15,SG,2026-06-30 09:00:00,Direct,1,0,1,RESERVED_NOT_PAID,,
