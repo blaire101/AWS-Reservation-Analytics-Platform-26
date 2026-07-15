@@ -1,0 +1,457 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Reservation analytics Glue workflow with DWD, DM and ADS dependencies.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: reservation-analytics
+  ArtifactBucket:
+    Type: String
+    Description: Existing S3 bucket containing code and mock data.
+  DailySchedule:
+    Type: String
+    Default: cron(0 2 * * ? *)
+    Description: Glue cron expression in UTC.
+
+Resources:
+  GlueExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-glue-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: DataAndCodeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub 'arn:aws:s3:::${ArtifactBucket}'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub 'arn:aws:s3:::${ArtifactBucket}/*'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                Resource: '*'
+
+  OdsDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: reservation_ods
+
+  DimDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: reservation_dim
+
+  DwdDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: reservation_dwd
+
+  DmDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: reservation_dm
+
+  AdsDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: reservation_ads
+
+  OdsReservationTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref OdsDatabase
+      TableInput:
+        Name: ods_reservation_event
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/data/ods/ods_reservation_event/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: reservation_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: campaign_id, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: reserve_time, Type: timestamp}
+            - {Name: channel, Type: string}
+
+  OdsOrderTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref OdsDatabase
+      TableInput:
+        Name: ods_order
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/data/ods/ods_order/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: order_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: order_time, Type: timestamp}
+            - {Name: order_status, Type: string}
+
+  DimCampaignTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DimDatabase
+      TableInput:
+        Name: dim_campaign
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/data/dim/dim_campaign/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: launch_start, Type: timestamp}
+            - {Name: launch_end, Type: timestamp}
+
+  DwdReservationTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DwdDatabase
+      TableInput:
+        Name: dwd_reservation_event
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/curated/dwd_reservation_event/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: {SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe}
+          Columns:
+            - {Name: reservation_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: campaign_id, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: reserve_time, Type: timestamp}
+            - {Name: channel, Type: string}
+
+  DwdPaidOrderTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DwdDatabase
+      TableInput:
+        Name: dwd_paid_order
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/curated/dwd_paid_order/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: {SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe}
+          Columns:
+            - {Name: order_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: order_time, Type: timestamp}
+
+  DmConversionTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DmDatabase
+      TableInput:
+        Name: dm_reservation_conversion
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/curated/dm_reservation_conversion/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: {SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe}
+          Columns:
+            - {Name: reservation_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: campaign_id, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: reserve_time, Type: timestamp}
+            - {Name: channel, Type: string}
+            - {Name: reserve_flag, Type: int}
+            - {Name: order_flag, Type: int}
+            - {Name: tag_reserved_not_paid, Type: int}
+            - {Name: conversion_segment, Type: string}
+            - {Name: order_id, Type: string}
+            - {Name: order_time, Type: timestamp}
+
+  AdsCampaignTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref AdsDatabase
+      TableInput:
+        Name: ads_campaign_conversion
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/curated/ads_campaign_conversion/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: {SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe}
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: channel, Type: string}
+            - {Name: reserved_users, Type: bigint}
+            - {Name: paid_users, Type: bigint}
+            - {Name: unconverted_users, Type: bigint}
+            - {Name: conversion_rate, Type: double}
+
+  AdsCrmTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref AdsDatabase
+      TableInput:
+        Name: ads_crm_reserved_not_paid
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/curated/ads_crm_reserved_not_paid/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: {SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe}
+          Columns:
+            - {Name: mid, Type: string}
+            - {Name: campaign_id, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: channel, Type: string}
+            - {Name: reserve_time, Type: timestamp}
+
+  AnalyticsWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Name: !Sub '${ProjectName}-workflow'
+      Description: DWD jobs run in parallel, then DM, then ADS jobs in parallel.
+
+  DwdReservationJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-dwd-reservation-event'
+      Role: !GetAtt GlueExecutionRole.Arn
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 20
+      Command:
+        Name: glueetl
+        PythonVersion: '3'
+        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
+      DefaultArguments:
+        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
+        '--SQL_PATH': sql/dwd/10_dwd_reservation_event.sql
+        '--OUTPUT_VIEW': dwd_reservation_event
+        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dwd_reservation_event'
+        '--INPUT_TABLES_JSON': '[{"database":"reservation_ods","table":"ods_reservation_event","view":"ods_reservation_event"}]'
+        '--enable-metrics': 'true'
+        '--enable-observability-metrics': 'true'
+
+  DwdPaidOrderJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-dwd-paid-order'
+      Role: !GetAtt GlueExecutionRole.Arn
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 20
+      Command:
+        Name: glueetl
+        PythonVersion: '3'
+        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
+      DefaultArguments:
+        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
+        '--SQL_PATH': sql/dwd/20_dwd_paid_order.sql
+        '--OUTPUT_VIEW': dwd_paid_order
+        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dwd_paid_order'
+        '--INPUT_TABLES_JSON': '[{"database":"reservation_ods","table":"ods_order","view":"ods_order"}]'
+        '--enable-metrics': 'true'
+        '--enable-observability-metrics': 'true'
+
+  DmConversionJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-dm-reservation-conversion'
+      Role: !GetAtt GlueExecutionRole.Arn
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 20
+      Command:
+        Name: glueetl
+        PythonVersion: '3'
+        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
+      DefaultArguments:
+        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
+        '--SQL_PATH': sql/dm/30_dm_reservation_conversion.sql
+        '--OUTPUT_VIEW': dm_reservation_conversion
+        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dm_reservation_conversion'
+        '--INPUT_TABLES_JSON': '[{"database":"reservation_dwd","table":"dwd_reservation_event","view":"dwd_reservation_event"},{"database":"reservation_dwd","table":"dwd_paid_order","view":"dwd_paid_order"},{"database":"reservation_dim","table":"dim_campaign","view":"dim_campaign"}]'
+        '--enable-metrics': 'true'
+        '--enable-observability-metrics': 'true'
+
+  AdsCampaignJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-ads-campaign-conversion'
+      Role: !GetAtt GlueExecutionRole.Arn
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 20
+      Command:
+        Name: glueetl
+        PythonVersion: '3'
+        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
+      DefaultArguments:
+        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
+        '--SQL_PATH': sql/ads/40_ads_campaign_conversion.sql
+        '--OUTPUT_VIEW': ads_campaign_conversion
+        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/ads_campaign_conversion'
+        '--INPUT_TABLES_JSON': '[{"database":"reservation_dm","table":"dm_reservation_conversion","view":"dm_reservation_conversion"}]'
+        '--enable-metrics': 'true'
+        '--enable-observability-metrics': 'true'
+
+  AdsCrmJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-ads-crm-reserved-not-paid'
+      Role: !GetAtt GlueExecutionRole.Arn
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 20
+      Command:
+        Name: glueetl
+        PythonVersion: '3'
+        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
+      DefaultArguments:
+        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
+        '--SQL_PATH': sql/ads/50_ads_crm_reserved_not_paid.sql
+        '--OUTPUT_VIEW': ads_crm_reserved_not_paid
+        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/ads_crm_reserved_not_paid'
+        '--INPUT_TABLES_JSON': '[{"database":"reservation_dm","table":"dm_reservation_conversion","view":"dm_reservation_conversion"}]'
+        '--enable-metrics': 'true'
+        '--enable-observability-metrics': 'true'
+
+  ManualStartTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub '${ProjectName}-manual-start'
+      Type: ON_DEMAND
+      WorkflowName: !Ref AnalyticsWorkflow
+      Actions:
+        - JobName: !Ref DwdReservationJob
+        - JobName: !Ref DwdPaidOrderJob
+
+  DailyStartTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub '${ProjectName}-daily-start'
+      Type: SCHEDULED
+      WorkflowName: !Ref AnalyticsWorkflow
+      Schedule: !Ref DailySchedule
+      StartOnCreation: true
+      Actions:
+        - JobName: !Ref DwdReservationJob
+        - JobName: !Ref DwdPaidOrderJob
+
+  DmAfterDwdTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub '${ProjectName}-dm-after-dwd'
+      Type: CONDITIONAL
+      WorkflowName: !Ref AnalyticsWorkflow
+      StartOnCreation: true
+      Predicate:
+        Logical: AND
+        Conditions:
+          - JobName: !Ref DwdReservationJob
+            State: SUCCEEDED
+            LogicalOperator: EQUALS
+          - JobName: !Ref DwdPaidOrderJob
+            State: SUCCEEDED
+            LogicalOperator: EQUALS
+      Actions:
+        - JobName: !Ref DmConversionJob
+
+  AdsAfterDmTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub '${ProjectName}-ads-after-dm'
+      Type: CONDITIONAL
+      WorkflowName: !Ref AnalyticsWorkflow
+      StartOnCreation: true
+      Predicate:
+        Conditions:
+          - JobName: !Ref DmConversionJob
+            State: SUCCEEDED
+            LogicalOperator: EQUALS
+      Actions:
+        - JobName: !Ref AdsCampaignJob
+        - JobName: !Ref AdsCrmJob
+
+Outputs:
+  WorkflowName:
+    Value: !Ref AnalyticsWorkflow
+  DailyStartTriggerName:
+    Value: !Ref DailyStartTrigger
+  ManualStartTriggerName:
+    Value: !Ref ManualStartTrigger
+  ArtifactBucket:
+    Value: !Ref ArtifactBucket

@@ -1,41 +1,49 @@
 # Reservation Analytics Platform
 
-A small SQL-first data engineering project that is easy to understand, runnable locally, and deployable to AWS Glue.
-
-![Architecture](docs/architecture.svg)
-
-## Architecture
+A compact, deployable AWS data-engineering project demonstrating:
 
 ```text
 ODS → DWD + DIM → DM → ADS
 ```
 
-There is no separate FACT layer.
+It uses:
 
-| Layer | Tables |
-|---|---|
-| ODS | `ods_reservation_event`, `ods_order` |
-| DWD | `dwd_reservation_event`, `dwd_paid_order` |
-| DIM | `dim_campaign` |
-| DM | `dm_reservation_conversion` |
-| ADS | `ads_campaign_conversion`, `ads_crm_reserved_not_paid` |
+- SQL developed locally in PyCharm or another IDE;
+- GitHub as the source of truth;
+- GitHub Actions for CI and DEV deployment;
+- five independent AWS Glue Jobs;
+- AWS Glue Workflow;
+- scheduled and conditional triggers;
+- CloudFormation for infrastructure;
+- Athena for validation.
 
-## Business logic
+![Architecture](docs/architecture.svg)
 
-The DM table has this grain:
+## Start here
+
+Follow the complete step-by-step guide:
 
 ```text
-User × Campaign × Product × Site
+RUNBOOK.md
 ```
 
-It:
+The local-only explanation is in:
 
-1. deduplicates repeated reservation events;
-2. keeps valid paid orders;
-3. matches orders inside the campaign window;
-4. creates conversion and CRM tags.
+```text
+ONE_HOUR_GUIDE.md
+```
 
-## Run locally
+## Workflow
+
+```text
+Daily Trigger
+    ├── DWD Reservation ─┐
+    └── DWD Paid Order ──┴── DM Reservation Conversion
+                                  ├── ADS Campaign Conversion
+                                  └── ADS CRM Audience
+```
+
+## Local run
 
 ```bash
 python3 -m venv .venv
@@ -45,57 +53,54 @@ python -m src.run_local
 pytest -q
 ```
 
-## Deploy to an AWS sandbox
+## AWS deployment
 
 ```bash
-aws sts get-caller-identity
 python scripts/generate_mock_ods.py
-python scripts/aws_setup.py --region ap-southeast-1
-python scripts/aws_run.py
-python scripts/aws_validate.py
+
+python scripts/upload_artifacts.py \
+  --bucket "$ARTIFACT_BUCKET" \
+  --region ap-southeast-1
+
+aws cloudformation deploy \
+  --template-file infra/glue-workflow.yaml \
+  --stack-name reservation-analytics-dev \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides \
+    ProjectName=reservation-analytics \
+    ArtifactBucket="$ARTIFACT_BUCKET" \
+    DailySchedule="cron(0 2 * * ? *)" \
+  --region ap-southeast-1
+
+python scripts/run_workflow.py \
+  --trigger reservation-analytics-manual-start \
+  --workflow reservation-analytics-workflow \
+  --region ap-southeast-1
 ```
-
-Optional schedule:
-
-```bash
-python scripts/aws_schedule.py
-```
-
-Cleanup:
-
-```bash
-python scripts/aws_cleanup.py --delete-bucket
-```
-
-## Development model
-
-SQL is developed in an IDE such as PyCharm, stored in Git, tested locally, and deployed to AWS Glue. The direct Boto3 commands in this repository are for a personal sandbox. A production team normally uses pull requests, CI/CD and infrastructure as code for deployment.
-
-Read:
-
-- [One-hour guide](ONE_HOUR_GUIDE.md)
-- [Development and deployment model](docs/DEVELOPMENT_AND_DEPLOYMENT.md)
-- [Data layers](docs/knowledge/01_data_layers.md)
-- [SQL patterns](docs/knowledge/02_sql_patterns.md)
-- [AWS services](docs/knowledge/03_aws_services.md)
-- [Extending the project](docs/EXTENDING_THE_PROJECT.md)
-- [Interview Q&A](docs/interview_qa.md)
 
 ## Repository structure
 
 ```text
-config/pipeline.json
-sql/local/                 local mock ODS
-sql/dwd/                   atomic detail SQL
-sql/dm/                    subject-level business SQL
-sql/ads/                   application outputs
-src/run_local.py
-glue_jobs/run_glue_sql_job.py
-scripts/                    sandbox deployment commands
-tests/
-docs/
+sql/                         SQL models
+glue_jobs/                   generic Glue Spark SQL runner
+infra/glue-workflow.yaml     CloudFormation
+.github/workflows/           CI and DEV deployment
+scripts/                     upload, run, validate and cleanup
+tests/                       local tests
+RUNBOOK.md                   complete deployment guide
+docs/                        architecture and interview notes
 ```
+
+## Data layers
+
+| Layer | Purpose | Tables |
+|---|---|---|
+| ODS | Source-aligned input | `ods_reservation_event`, `ods_order` |
+| DWD | Clean atomic facts | `dwd_reservation_event`, `dwd_paid_order` |
+| DIM | Shared dimensions | `dim_campaign` |
+| DM | Subject-level business model | `dm_reservation_conversion` |
+| ADS | Application outputs | campaign metrics and CRM audience |
 
 ## Public repository safety
 
-All names and sample data are generic and synthetic. The repository contains no employer code, internal identifiers or company-specific names.
+All data and names are synthetic and generic. The repository contains no employer production code or company-specific references.

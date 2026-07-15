@@ -1,0 +1,79 @@
+{
+  "jobs": [
+    {
+      "job_key": "dwd_reservation_event",
+      "sql_path": "sql/dwd/10_dwd_reservation_event.sql",
+      "output_database": "reservation_dwd",
+      "output_table": "dwd_reservation_event",
+      "inputs": [
+        {
+          "database": "reservation_ods",
+          "table": "ods_reservation_event",
+          "view": "ods_reservation_event"
+        }
+      ]
+    },
+    {
+      "job_key": "dwd_paid_order",
+      "sql_path": "sql/dwd/20_dwd_paid_order.sql",
+      "output_database": "reservation_dwd",
+      "output_table": "dwd_paid_order",
+      "inputs": [
+        {
+          "database": "reservation_ods",
+          "table": "ods_order",
+          "view": "ods_order"
+        }
+      ]
+    },
+    {
+      "job_key": "dm_reservation_conversion",
+      "sql_path": "sql/dm/30_dm_reservation_conversion.sql",
+      "output_database": "reservation_dm",
+      "output_table": "dm_reservation_conversion",
+      "inputs": [
+        {
+          "database": "reservation_dwd",
+          "table": "dwd_reservation_event",
+          "view": "dwd_reservation_event"
+        },
+        {
+          "database": "reservation_dwd",
+          "table": "dwd_paid_order",
+          "view": "dwd_paid_order"
+        },
+        {
+          "database": "reservation_dim",
+          "table": "dim_campaign",
+          "view": "dim_campaign"
+        }
+      ]
+    },
+    {
+      "job_key": "ads_campaign_conversion",
+      "sql_path": "sql/ads/40_ads_campaign_conversion.sql",
+      "output_database": "reservation_ads",
+      "output_table": "ads_campaign_conversion",
+      "inputs": [
+        {
+          "database": "reservation_dm",
+          "table": "dm_reservation_conversion",
+          "view": "dm_reservation_conversion"
+        }
+      ]
+    },
+    {
+      "job_key": "ads_crm_reserved_not_paid",
+      "sql_path": "sql/ads/50_ads_crm_reserved_not_paid.sql",
+      "output_database": "reservation_ads",
+      "output_table": "ads_crm_reserved_not_paid",
+      "inputs": [
+        {
+          "database": "reservation_dm",
+          "table": "dm_reservation_conversion",
+          "view": "dm_reservation_conversion"
+        }
+      ]
+    }
+  ]
+}
