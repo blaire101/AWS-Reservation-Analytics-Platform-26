@@ -197,3 +197,25 @@ Step Functions manages the execution sequence, retries, failures and parallel ta
 | Best fit | Small Glue-only ETL pipeline | More complex or extensible workflow |
 
 Version 3 changes only the orchestration layer.
+## Version 3.0.1 — Decoupled Orchestration Ownership
+
+Version 3.0.1 keeps the Version 3 runtime architecture but separates responsibilities.
+
+```text
+Data Engineer pipeline contract
+            ↓
+Platform-owned reusable module
+            ↓
+EventBridge → Step Functions → Glue Jobs
+```
+
+| Area | Data Engineer | Platform / SRE |
+|---|---|---|
+| SQL and Glue job logic | Owns | Supports |
+| Task order and dependencies | Owns | Provides supported patterns |
+| Business-date semantics | Owns | No |
+| Step Functions implementation | Uses | Owns |
+| IAM and EventBridge permissions | Declares requirements | Owns |
+| Logging, security and deployment | Uses | Owns |
+
+See `docs/V3_0_1_DECOUPLED_ARCHITECTURE.md`.
