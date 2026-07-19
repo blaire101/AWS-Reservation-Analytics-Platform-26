@@ -1,0 +1,33 @@
+version: '1.0'
+
+pipeline:
+  name: reservation-analytics
+  description: Run DM first, then run the two ADS jobs in parallel.
+
+trigger:
+  event_source: data-platform.upstream
+  detail_type: Reservation DWD Data Ready
+  required_detail:
+    status: SUCCEEDED
+    dwd_ready: true
+    dim_ready: true
+
+runtime:
+  business_date_path: $.detail.business_date
+
+tasks:
+  dm:
+    glue_job_parameter: DmConversionJob
+    retry:
+      interval_seconds: 30
+      max_attempts: 2
+      backoff_rate: 2.0
+
+  ads:
+    parallel:
+      - glue_job_parameter: AdsCampaignJob
+      - glue_job_parameter: AdsCrmJob
+    retry:
+      interval_seconds: 30
+      max_attempts: 2
+      backoff_rate: 2.0
