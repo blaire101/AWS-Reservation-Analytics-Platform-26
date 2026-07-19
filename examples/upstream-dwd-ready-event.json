@@ -1,0 +1,10 @@
+{
+  "Entries": [
+    {
+      "Source": "data-platform.upstream",
+      "DetailType": "Reservation DWD Data Ready",
+      "Detail": "{\"business_date\": \"2026-07-19\", \"status\": \"SUCCEEDED\", \"dwd_ready\": true, \"dim_ready\": true}",
+      "EventBusName": "default"
+    }
+  ]
+}

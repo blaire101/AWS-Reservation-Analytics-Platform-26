@@ -139,3 +139,14 @@ The production-style downstream stack is:
 ```text
 infra/glue-workflow.yaml
 ```
+> **Version 2:** ODS, DWD and DIM are upstream-managed data contracts. This repository owns only DM and ADS and starts after receiving an upstream DWD Data Ready event.
+
+```text
+External ODS → DWD + DIM
+                ↓
+        DWD Data Ready Event
+                ↓
+              DM → ADS
+```
+
+See `docs/V2_DEMO_RUNBOOK.md`.
