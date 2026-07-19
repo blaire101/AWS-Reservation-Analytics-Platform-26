@@ -155,16 +155,45 @@ See `docs/V2_DEMO_RUNBOOK.md`.
 
 > **Version 3:** EventBridge now starts AWS Step Functions directly. The state machine runs the DM Glue job synchronously, then runs the two ADS Glue jobs in parallel with explicit retry and failure handling.
 
+This approach is simple and suitable for a Glue-only pipeline. However, orchestration is distributed across Lambda, Glue Workflow and Glue Triggers.
+
+Version 3 replaces Lambda and Glue Workflow with AWS Step Functions.
+
 ```text
 Upstream DWD + DIM
         ↓ EventBridge
    Step Functions
         ↓
-       DM
+       DM    (→ DM Glue Job)
         ↓
-   ADS Campaign ∥ ADS CRM
+   ADS Campaign ∥ ADS CRM  (→ ADS Glue Jobs in parallel)
 ```
 
 Version 3 changes only orchestration. Data ownership, tables, SQL and S3 paths remain unchanged.
 
 See `docs/V3_ARCHITECTURE.md` and `docs/V3_DEPLOYMENT_RUNBOOK.md`.
+
+Step Functions manages the execution sequence, retries, failures and parallel tasks in one state machine.
+
+### Advantages and disadvantages
+
+| Version | Advantages | Disadvantages |
+|---|---|---|
+| Version 2 | Simple for Glue-only pipelines; easy to understand; uses Glue-native Workflow and Triggers | Requires Lambda; orchestration is split across several AWS services; retry and failure handling are less centralized |
+| Version 3 | Centralized orchestration; explicit retry and failure handling; clearer parallel execution; easier to extend to other AWS services | More YAML and IAM configuration; slightly more complex for a small pipeline |
+
+### Detailed comparison
+
+| Area | Version 2 | Version 3 |
+|---|---|---|
+| Event trigger | EventBridge | EventBridge |
+| Entry point | Lambda | Step Functions |
+| Orchestration | Glue Workflow and Glue Triggers | Step Functions State Machine |
+| DM execution | Started by Glue Workflow | Started with `glue:startJobRun.sync` |
+| ADS execution | Glue conditional trigger | Step Functions `Parallel` state |
+| Retry handling | Distributed across EventBridge, Lambda and Glue | Defined explicitly in Step Functions |
+| Failure handling | Based mainly on Glue job status | Uses explicit `Catch` and `Fail` states |
+| Parameter passing | Lambda passes Workflow Run Properties | Event values are passed directly to Glue job arguments |
+| Best fit | Small Glue-only ETL pipeline | More complex or extensible workflow |
+
+Version 3 changes only the orchestration layer.
