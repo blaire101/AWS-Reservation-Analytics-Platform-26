@@ -150,3 +150,21 @@ External ODS → DWD + DIM
 ```
 
 See `docs/V2_DEMO_RUNBOOK.md`.
+
+# Version 3 — EventBridge now starts AWS Step Functions directly
+
+> **Version 3:** EventBridge now starts AWS Step Functions directly. The state machine runs the DM Glue job synchronously, then runs the two ADS Glue jobs in parallel with explicit retry and failure handling.
+
+```text
+Upstream DWD + DIM
+        ↓ EventBridge
+   Step Functions
+        ↓
+       DM
+        ↓
+   ADS Campaign ∥ ADS CRM
+```
+
+Version 3 changes only orchestration. Data ownership, tables, SQL and S3 paths remain unchanged.
+
+See `docs/V3_ARCHITECTURE.md` and `docs/V3_DEPLOYMENT_RUNBOOK.md`.
