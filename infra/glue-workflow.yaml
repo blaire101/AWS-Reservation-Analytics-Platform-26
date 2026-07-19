@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Version 2 downstream workflow consuming upstream-owned DWD and DIM datasets and producing DM and ADS datasets.
+Description: Version 3 downstream workflow using EventBridge and Step Functions to orchestrate DM and ADS Glue jobs.
 
 Parameters:
   ProjectName:
@@ -175,12 +175,6 @@ Resources:
             - {Name: channel, Type: string}
             - {Name: reserve_time, Type: timestamp}
 
-  AnalyticsWorkflow:
-    Type: AWS::Glue::Workflow
-    Properties:
-      Name: !Sub '${ProjectName}-workflow'
-      Description: DM starts after upstream DWD/DIM readiness, then ADS jobs run in parallel.
-
 
   DmConversionJob:
     Type: AWS::Glue::Job
@@ -254,103 +248,180 @@ Resources:
         '--enable-observability-metrics': 'true'
 
 
-  OnDemandStartTrigger:
-    Type: AWS::Glue::Trigger
-    Properties:
-      Name: !Sub '${ProjectName}-on-demand-start'
-      Type: ON_DEMAND
-      WorkflowName: !Ref AnalyticsWorkflow
-      Actions:
-        - JobName: !Ref DmConversionJob
-
-  AdsAfterDmTrigger:
-    Type: AWS::Glue::Trigger
-    Properties:
-      Name: !Sub '${ProjectName}-ads-after-dm'
-      Type: CONDITIONAL
-      WorkflowName: !Ref AnalyticsWorkflow
-      StartOnCreation: true
-      Predicate:
-        Conditions:
-          - JobName: !Ref DmConversionJob
-            State: SUCCEEDED
-            LogicalOperator: EQUALS
-      Actions:
-        - JobName: !Ref AdsCampaignJob
-        - JobName: !Ref AdsCrmJob
 
 
-
-  WorkflowStarterRole:
+  StepFunctionsExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ProjectName}-workflow-starter-role'
+      RoleName: !Sub '${ProjectName}-step-functions-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              Service: lambda.amazonaws.com
+              Service: states.amazonaws.com
             Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: StartReservationAnalyticsWorkflow
+        - PolicyName: RunReservationAnalyticsGlueJobs
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - glue:StartWorkflowRun
-                Resource: '*'
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                  - glue:BatchStopJobRun
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${DmConversionJob}'
+                  - !Sub 'arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${AdsCampaignJob}'
+                  - !Sub 'arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${AdsCrmJob}'
 
-  WorkflowStarterFunction:
-    Type: AWS::Lambda::Function
+  ReservationAnalyticsStateMachine:
+    Type: AWS::StepFunctions::StateMachine
     Properties:
-      FunctionName: !Sub '${ProjectName}-workflow-starter'
-      Runtime: python3.12
-      Handler: index.lambda_handler
-      Role: !GetAtt WorkflowStarterRole.Arn
-      Timeout: 30
-      Environment:
-        Variables:
-          WORKFLOW_NAME: !Ref AnalyticsWorkflow
-      Code:
-        ZipFile: |
-          import json
-          import os
-          import boto3
-
-          glue = boto3.client("glue")
-
-          def lambda_handler(event, context):
-              detail = event.get("detail", {})
-              business_date = detail.get("business_date")
-
-              if not business_date:
-                  raise ValueError("Missing detail.business_date")
-
-              response = glue.start_workflow_run(
-                  Name=os.environ["WORKFLOW_NAME"],
-                  RunProperties={
-                      "business_date": str(business_date),
-                      "upstream_event_id": str(event.get("id", ""))
+      StateMachineName: !Sub '${ProjectName}-state-machine'
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Run DM, then run the two ADS Glue jobs in parallel.",
+          "StartAt": "Run DM Conversion",
+          "States": {
+            "Run DM Conversion": {
+              "Type": "Task",
+              "Resource": "arn:${AWS::Partition}:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${DmConversionJob}",
+                "Arguments": {
+                  "--BUSINESS_DATE.$": "$.detail.business_date"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.TaskFailed"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.dm_error",
+                  "Next": "Workflow Failed"
+                }
+              ],
+              "Next": "Run ADS Jobs"
+            },
+            "Run ADS Jobs": {
+              "Type": "Parallel",
+              "Branches": [
+                {
+                  "StartAt": "Run ADS Campaign",
+                  "States": {
+                    "Run ADS Campaign": {
+                      "Type": "Task",
+                      "Resource": "arn:${AWS::Partition}:states:::glue:startJobRun.sync",
+                      "Parameters": {
+                        "JobName": "${AdsCampaignJob}",
+                        "Arguments": {
+                          "--BUSINESS_DATE.$": "$.detail.business_date"
+                        }
+                      },
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "IntervalSeconds": 30,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 2.0
+                        }
+                      ],
+                      "End": true
+                    }
                   }
-              )
+                },
+                {
+                  "StartAt": "Run ADS CRM",
+                  "States": {
+                    "Run ADS CRM": {
+                      "Type": "Task",
+                      "Resource": "arn:${AWS::Partition}:states:::glue:startJobRun.sync",
+                      "Parameters": {
+                        "JobName": "${AdsCrmJob}",
+                        "Arguments": {
+                          "--BUSINESS_DATE.$": "$.detail.business_date"
+                        }
+                      },
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "IntervalSeconds": 30,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 2.0
+                        }
+                      ],
+                      "End": true
+                    }
+                  }
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.ads_error",
+                  "Next": "Workflow Failed"
+                }
+              ],
+              "Next": "Workflow Succeeded"
+            },
+            "Workflow Succeeded": {
+              "Type": "Succeed"
+            },
+            "Workflow Failed": {
+              "Type": "Fail",
+              "Error": "ReservationAnalyticsPipelineFailed",
+              "Cause": "A DM or ADS Glue job failed after retry."
+            }
+          }
+        }
 
-              return {
-                  "statusCode": 200,
-                  "body": json.dumps({
-                      "workflow_run_id": response["RunId"],
-                      "business_date": business_date
-                  })
-              }
+  EventBridgeStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-eventbridge-step-functions-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartReservationAnalyticsStateMachine
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !GetAtt ReservationAnalyticsStateMachine.Arn
 
   UpstreamDwdReadyRule:
     Type: AWS::Events::Rule
     Properties:
       Name: !Sub '${ProjectName}-upstream-dwd-ready'
-      Description: Starts DM and ADS after upstream DWD and DIM are ready.
+      Description: Starts the Step Functions state machine after upstream DWD and DIM are ready.
       State: ENABLED
       EventPattern:
         source:
@@ -365,26 +436,19 @@ Resources:
           dim_ready:
             - true
       Targets:
-        - Arn: !GetAtt WorkflowStarterFunction.Arn
-          Id: StartReservationAnalyticsWorkflow
+        - Arn: !GetAtt ReservationAnalyticsStateMachine.Arn
+          RoleArn: !GetAtt EventBridgeStepFunctionsRole.Arn
+          Id: StartReservationAnalyticsStateMachine
           RetryPolicy:
             MaximumEventAgeInSeconds: 3600
             MaximumRetryAttempts: 2
 
-  AllowEventBridgeInvokeWorkflowStarter:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref WorkflowStarterFunction
-      Action: lambda:InvokeFunction
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt UpstreamDwdReadyRule.Arn
-
 Outputs:
-  WorkflowName:
-    Value: !Ref AnalyticsWorkflow
+  StateMachineArn:
+    Value: !Ref ReservationAnalyticsStateMachine
 
-  OnDemandStartTriggerName:
-    Value: !Ref OnDemandStartTrigger
+  StateMachineName:
+    Value: !GetAtt ReservationAnalyticsStateMachine.Name
 
   UpstreamDwdReadyRuleName:
     Value: !Ref UpstreamDwdReadyRule
