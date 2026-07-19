@@ -197,7 +197,8 @@ Step Functions manages the execution sequence, retries, failures and parallel ta
 | Best fit | Small Glue-only ETL pipeline | More complex or extensible workflow |
 
 Version 3 changes only the orchestration layer.
-## Version 3.0.1 — Decoupled Orchestration Ownership
+
+# Version 3.0.1 — Decoupled Orchestration Ownership
 
 Version 3.0.1 keeps the Version 3 runtime architecture but separates responsibilities.
 
