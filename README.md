@@ -1,5 +1,7 @@
 # Reservation Analytics Platform
 
+> **Version 1:** This standalone implementation manages the complete ODS, DIM, DWD, DM, and ADS pipeline within a single AWS Glue Workflow.
+
 A compact, deployable AWS data-engineering project demonstrating:
 
 ```text
