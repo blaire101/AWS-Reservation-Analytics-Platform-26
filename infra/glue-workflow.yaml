@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Reservation analytics Glue workflow with DWD, DM and ADS dependencies.
+Description: Version 2 reservation analytics workflow. Consumes upstream-owned ODS and DIM tables and produces DWD, DM and ADS datasets.
 
 Parameters:
   ProjectName:
@@ -8,10 +8,39 @@ Parameters:
   ArtifactBucket:
     Type: String
     Description: Existing S3 bucket containing code and mock data.
-  DailySchedule:
+  UpstreamDataBucket:
     Type: String
-    Default: cron(0 2 * * ? *)
-    Description: Glue cron expression in UTC.
+    Description: Existing S3 bucket containing upstream ODS and DIM data.
+
+  UpstreamOdsDatabase:
+    Type: String
+    Default: reservation_ods
+    Description: Existing upstream Glue Catalog ODS database.
+
+  UpstreamDimDatabase:
+    Type: String
+    Default: reservation_dim
+    Description: Existing upstream Glue Catalog DIM database.
+
+  OdsReservationTableName:
+    Type: String
+    Default: ods_reservation_event
+
+  OdsOrderTableName:
+    Type: String
+    Default: ods_order
+
+  DimCampaignTableName:
+    Type: String
+    Default: dim_campaign
+
+  UpstreamEventSource:
+    Type: String
+    Default: data-platform.upstream
+
+  UpstreamEventDetailType:
+    Type: String
+    Default: Reservation Source Data Ready
 
 Resources:
   GlueExecutionRole:
@@ -42,6 +71,13 @@ Resources:
                   - s3:DeleteObject
                 Resource: !Sub 'arn:aws:s3:::${ArtifactBucket}/*'
               - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub 'arn:aws:s3:::${UpstreamDataBucket}'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub 'arn:aws:s3:::${UpstreamDataBucket}/*'
+              - Effect: Allow
                 Action:
                   - glue:GetDatabase
                   - glue:GetDatabases
@@ -51,19 +87,6 @@ Resources:
                   - glue:GetPartitions
                 Resource: '*'
 
-  OdsDatabase:
-    Type: AWS::Glue::Database
-    Properties:
-      CatalogId: !Ref AWS::AccountId
-      DatabaseInput:
-        Name: reservation_ods
-
-  DimDatabase:
-    Type: AWS::Glue::Database
-    Properties:
-      CatalogId: !Ref AWS::AccountId
-      DatabaseInput:
-        Name: reservation_dim
 
   DwdDatabase:
     Type: AWS::Glue::Database
@@ -297,7 +320,8 @@ Resources:
         '--SQL_PATH': sql/dwd/10_dwd_reservation_event.sql
         '--OUTPUT_VIEW': dwd_reservation_event
         '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dwd_reservation_event'
-        '--INPUT_TABLES_JSON': '[{"database":"reservation_ods","table":"ods_reservation_event","view":"ods_reservation_event"}]'
+        '--INPUT_TABLES_JSON': !Sub |
+          [{"database":"${UpstreamOdsDatabase}","table":"${OdsReservationTableName}","view":"ods_reservation_event"}]
         '--enable-metrics': 'true'
         '--enable-observability-metrics': 'true'
 
@@ -319,7 +343,8 @@ Resources:
         '--SQL_PATH': sql/dwd/20_dwd_paid_order.sql
         '--OUTPUT_VIEW': dwd_paid_order
         '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dwd_paid_order'
-        '--INPUT_TABLES_JSON': '[{"database":"reservation_ods","table":"ods_order","view":"ods_order"}]'
+        '--INPUT_TABLES_JSON': !Sub |
+          [{"database":"${UpstreamOdsDatabase}","table":"${OdsOrderTableName}","view":"ods_order"}]
         '--enable-metrics': 'true'
         '--enable-observability-metrics': 'true'
 
@@ -341,7 +366,8 @@ Resources:
         '--SQL_PATH': sql/dm/30_dm_reservation_conversion.sql
         '--OUTPUT_VIEW': dm_reservation_conversion
         '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dm_reservation_conversion'
-        '--INPUT_TABLES_JSON': '[{"database":"reservation_dwd","table":"dwd_reservation_event","view":"dwd_reservation_event"},{"database":"reservation_dwd","table":"dwd_paid_order","view":"dwd_paid_order"},{"database":"reservation_dim","table":"dim_campaign","view":"dim_campaign"}]'
+        '--INPUT_TABLES_JSON': !Sub |
+          [{"database":"reservation_dwd","table":"dwd_reservation_event","view":"dwd_reservation_event"},{"database":"reservation_dwd","table":"dwd_paid_order","view":"dwd_paid_order"},{"database":"${UpstreamDimDatabase}","table":"${DimCampaignTableName}","view":"dim_campaign"}]
         '--enable-metrics': 'true'
         '--enable-observability-metrics': 'true'
 
@@ -390,14 +416,12 @@ Resources:
         '--enable-observability-metrics': 'true'
 
 
-  DailyStartTrigger:
+  OnDemandStartTrigger:
     Type: AWS::Glue::Trigger
     Properties:
-      Name: !Sub '${ProjectName}-daily-start'
-      Type: SCHEDULED
+      Name: !Sub '${ProjectName}-on-demand-start'
+      Type: ON_DEMAND
       WorkflowName: !Ref AnalyticsWorkflow
-      Schedule: !Ref DailySchedule
-      StartOnCreation: true
       Actions:
         - JobName: !Ref DwdReservationJob
         - JobName: !Ref DwdPaidOrderJob
@@ -437,10 +461,113 @@ Resources:
         - JobName: !Ref AdsCampaignJob
         - JobName: !Ref AdsCrmJob
 
+
+  WorkflowStarterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-workflow-starter-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: StartReservationAnalyticsWorkflow
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:StartWorkflowRun
+                Resource: '*'
+
+  WorkflowStarterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-workflow-starter'
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt WorkflowStarterRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          WORKFLOW_NAME: !Ref AnalyticsWorkflow
+      Code:
+        ZipFile: |
+          import json
+          import os
+
+          import boto3
+
+          glue = boto3.client("glue")
+
+          def lambda_handler(event, context):
+              detail = event.get("detail", {})
+              business_date = detail.get("business_date")
+
+              if not business_date:
+                  raise ValueError("Missing detail.business_date")
+
+              response = glue.start_workflow_run(
+                  Name=os.environ["WORKFLOW_NAME"],
+                  RunProperties={
+                      "business_date": str(business_date),
+                      "upstream_event_id": str(event.get("id", "")),
+                      "upstream_event_source": str(event.get("source", ""))
+                  }
+              )
+
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps({
+                      "workflow_run_id": response["RunId"],
+                      "business_date": business_date
+                  })
+              }
+
+  UpstreamDataReadyRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-upstream-data-ready'
+      Description: Start reservation analytics after upstream ODS and DIM are ready.
+      State: ENABLED
+      EventPattern:
+        source:
+          - !Ref UpstreamEventSource
+        detail-type:
+          - !Ref UpstreamEventDetailType
+        detail:
+          status:
+            - SUCCEEDED
+          ods_ready:
+            - true
+          dim_ready:
+            - true
+      Targets:
+        - Arn: !GetAtt WorkflowStarterFunction.Arn
+          Id: StartReservationAnalyticsWorkflow
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 2
+
+  AllowEventBridgeInvokeWorkflowStarter:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WorkflowStarterFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt UpstreamDataReadyRule.Arn
+
 Outputs:
   WorkflowName:
     Value: !Ref AnalyticsWorkflow
-  DailyStartTriggerName:
-    Value: !Ref DailyStartTrigger
+  OnDemandStartTriggerName:
+    Value: !Ref OnDemandStartTrigger
+  UpstreamDataReadyRuleName:
+    Value: !Ref UpstreamDataReadyRule
   ArtifactBucket:
     Value: !Ref ArtifactBucket

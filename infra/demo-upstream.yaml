@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Demo-only upstream ODS and DIM Glue Catalog resources for reservation analytics Version 2.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: reservation-analytics
+
+  UpstreamDataBucket:
+    Type: String
+    Description: Existing S3 bucket containing generated mock ODS and DIM Parquet files.
+
+Resources:
+  DemoOdsDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: reservation_ods
+        Description: Demo upstream ODS database. In production this is owned by another project.
+
+  DemoDimDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: reservation_dim
+        Description: Demo upstream DIM database. In production this is owned by another project.
+
+  DemoOdsReservationTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DemoOdsDatabase
+      TableInput:
+        Name: ods_reservation_event
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          EXTERNAL: 'TRUE'
+        StorageDescriptor:
+          Location: !Sub 's3://${UpstreamDataBucket}/data/ods/ods_reservation_event/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: reservation_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: campaign_id, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: reserve_time, Type: timestamp}
+            - {Name: channel, Type: string}
+
+  DemoOdsOrderTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DemoOdsDatabase
+      TableInput:
+        Name: ods_order
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          EXTERNAL: 'TRUE'
+        StorageDescriptor:
+          Location: !Sub 's3://${UpstreamDataBucket}/data/ods/ods_order/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: order_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: order_time, Type: timestamp}
+            - {Name: order_status, Type: string}
+
+  DemoDimCampaignTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DemoDimDatabase
+      TableInput:
+        Name: dim_campaign
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          EXTERNAL: 'TRUE'
+        StorageDescriptor:
+          Location: !Sub 's3://${UpstreamDataBucket}/data/dim/dim_campaign/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: campaign_id, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: launch_start, Type: timestamp}
+            - {Name: launch_end, Type: timestamp}
+
+Outputs:
+  OdsDatabaseName:
+    Value: !Ref DemoOdsDatabase
+  DimDatabaseName:
+    Value: !Ref DemoDimDatabase

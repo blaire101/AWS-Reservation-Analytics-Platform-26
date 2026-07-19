@@ -1,6 +1,7 @@
 # Reservation Analytics Platform
 
-> **Version 1:** This standalone implementation manages the complete ODS, DIM, DWD, DM, and ADS pipeline within a single AWS Glue Workflow.
+
+# Version 1 - This standalone implementation manages the complete ODS, DIM, DWD, DM, and ADS pipeline within a single AWS Glue Workflow
 
 A compact, deployable AWS data-engineering project demonstrating:
 
@@ -106,3 +107,35 @@ docs/                        architecture and interview notes
 ## Public repository safety
 
 All data and names are synthetic and generic. The repository contains no employer production code or company-specific references.
+
+# Version 2 — Upstream-dependent architecture
+
+> Version 2 treats ODS and DIM as externally managed upstream data contracts. This repository owns only DWD, DM and ADS and starts after receiving an upstream Data Ready event.
+
+> docs/V2_DEMO_RUNBOOK.md
+
+```text
+External ODS/DIM
+→ EventBridge Data Ready event
+→ Lambda
+→ Glue Workflow
+→ DWD → DM → ADS
+```
+
+For a fully runnable simulation, see:
+
+```text
+docs/V2_DEMO_RUNBOOK.md
+```
+
+The demo creates external-looking ODS and DIM resources through a separate stack:
+
+```text
+infra/demo-upstream.yaml
+```
+
+The production-style downstream stack is:
+
+```text
+infra/glue-workflow.yaml
+```
