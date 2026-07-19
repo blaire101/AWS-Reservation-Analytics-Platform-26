@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Reusable platform-owned Step Functions orchestration module.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: reservation-analytics
+
+  DmConversionJob:
+    Type: String
+
+  AdsCampaignJob:
+    Type: String
+
+  AdsCrmJob:
+    Type: String
+
+  UpstreamEventSource:
+    Type: String
+    Default: data-platform.upstream
+
+  UpstreamEventDetailType:
+    Type: String
+    Default: Reservation DWD Data Ready
+
+Resources:
+  StepFunctionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/vendedlogs/states/${ProjectName}-state-machine'
+      RetentionInDays: 30
+
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-step-functions-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RunApprovedGlueJobs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                  - glue:BatchStopJobRun
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${DmConversionJob}'
+                  - !Sub 'arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${AdsCampaignJob}'
+                  - !Sub 'arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:job/${AdsCrmJob}'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: '*'
+
+  ReservationAnalyticsStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${ProjectName}-state-machine'
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StepFunctionsLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      DefinitionString: !Sub |
+        {
+          "StartAt": "Run DM Conversion",
+          "States": {
+            "Run DM Conversion": {
+              "Type": "Task",
+              "Resource": "arn:${AWS::Partition}:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${DmConversionJob}",
+                "Arguments": {
+                  "--BUSINESS_DATE.$": "$.detail.business_date"
+                }
+              },
+              "Retry": [{
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 30,
+                "MaxAttempts": 2,
+                "BackoffRate": 2.0
+              }],
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "Next": "Workflow Failed"
+              }],
+              "Next": "Run ADS Jobs"
+            },
+            "Run ADS Jobs": {
+              "Type": "Parallel",
+              "Branches": [
+                {
+                  "StartAt": "Run ADS Campaign",
+                  "States": {
+                    "Run ADS Campaign": {
+                      "Type": "Task",
+                      "Resource": "arn:${AWS::Partition}:states:::glue:startJobRun.sync",
+                      "Parameters": {
+                        "JobName": "${AdsCampaignJob}",
+                        "Arguments": {
+                          "--BUSINESS_DATE.$": "$.detail.business_date"
+                        }
+                      },
+                      "Retry": [{
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 30,
+                        "MaxAttempts": 2,
+                        "BackoffRate": 2.0
+                      }],
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Run ADS CRM",
+                  "States": {
+                    "Run ADS CRM": {
+                      "Type": "Task",
+                      "Resource": "arn:${AWS::Partition}:states:::glue:startJobRun.sync",
+                      "Parameters": {
+                        "JobName": "${AdsCrmJob}",
+                        "Arguments": {
+                          "--BUSINESS_DATE.$": "$.detail.business_date"
+                        }
+                      },
+                      "Retry": [{
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 30,
+                        "MaxAttempts": 2,
+                        "BackoffRate": 2.0
+                      }],
+                      "End": true
+                    }
+                  }
+                }
+              ],
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "Next": "Workflow Failed"
+              }],
+              "Next": "Workflow Succeeded"
+            },
+            "Workflow Succeeded": {
+              "Type": "Succeed"
+            },
+            "Workflow Failed": {
+              "Type": "Fail",
+              "Error": "ReservationAnalyticsPipelineFailed"
+            }
+          }
+        }
+
+  EventBridgeStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-eventbridge-step-functions-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartApprovedStateMachine
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !GetAtt ReservationAnalyticsStateMachine.Arn
+
+  UpstreamDwdReadyRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-upstream-dwd-ready'
+      State: ENABLED
+      EventPattern:
+        source:
+          - !Ref UpstreamEventSource
+        detail-type:
+          - !Ref UpstreamEventDetailType
+        detail:
+          status:
+            - SUCCEEDED
+          dwd_ready:
+            - true
+          dim_ready:
+            - true
+      Targets:
+        - Arn: !GetAtt ReservationAnalyticsStateMachine.Arn
+          RoleArn: !GetAtt EventBridgeStepFunctionsRole.Arn
+          Id: StartReservationAnalyticsStateMachine
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref ReservationAnalyticsStateMachine
+
+  EventBridgeRuleName:
+    Value: !Ref UpstreamDwdReadyRule
