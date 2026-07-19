@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Version 2 reservation analytics workflow. Consumes upstream-owned ODS and DIM tables and produces DWD, DM and ADS datasets.
+Description: Version 2 downstream workflow consuming upstream-owned DWD and DIM datasets and producing DM and ADS datasets.
 
 Parameters:
   ProjectName:
@@ -10,25 +10,23 @@ Parameters:
     Description: Existing S3 bucket containing code and mock data.
   UpstreamDataBucket:
     Type: String
-    Description: Existing S3 bucket containing upstream ODS and DIM data.
+    Description: Existing S3 bucket containing upstream DWD and DIM data.
 
-  UpstreamOdsDatabase:
+  UpstreamDwdDatabase:
     Type: String
-    Default: reservation_ods
-    Description: Existing upstream Glue Catalog ODS database.
+    Default: reservation_dwd
 
   UpstreamDimDatabase:
     Type: String
     Default: reservation_dim
-    Description: Existing upstream Glue Catalog DIM database.
 
-  OdsReservationTableName:
+  DwdReservationTableName:
     Type: String
-    Default: ods_reservation_event
+    Default: dwd_reservation_event
 
-  OdsOrderTableName:
+  DwdPaidOrderTableName:
     Type: String
-    Default: ods_order
+    Default: dwd_paid_order
 
   DimCampaignTableName:
     Type: String
@@ -40,7 +38,7 @@ Parameters:
 
   UpstreamEventDetailType:
     Type: String
-    Default: Reservation Source Data Ready
+    Default: Reservation DWD Data Ready
 
 Resources:
   GlueExecutionRole:
@@ -87,13 +85,6 @@ Resources:
                   - glue:GetPartitions
                 Resource: '*'
 
-
-  DwdDatabase:
-    Type: AWS::Glue::Database
-    Properties:
-      CatalogId: !Ref AWS::AccountId
-      DatabaseInput:
-        Name: reservation_dwd
 
   DmDatabase:
     Type: AWS::Glue::Database
@@ -300,53 +291,8 @@ Resources:
     Type: AWS::Glue::Workflow
     Properties:
       Name: !Sub '${ProjectName}-workflow'
-      Description: DWD jobs run in parallel, then DM, then ADS jobs in parallel.
+      Description: DM starts after upstream DWD/DIM readiness, then ADS jobs run in parallel.
 
-  DwdReservationJob:
-    Type: AWS::Glue::Job
-    Properties:
-      Name: !Sub '${ProjectName}-dwd-reservation-event'
-      Role: !GetAtt GlueExecutionRole.Arn
-      GlueVersion: '5.0'
-      WorkerType: G.1X
-      NumberOfWorkers: 2
-      Timeout: 20
-      Command:
-        Name: glueetl
-        PythonVersion: '3'
-        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
-      DefaultArguments:
-        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
-        '--SQL_PATH': sql/dwd/10_dwd_reservation_event.sql
-        '--OUTPUT_VIEW': dwd_reservation_event
-        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dwd_reservation_event'
-        '--INPUT_TABLES_JSON': !Sub |
-          [{"database":"${UpstreamOdsDatabase}","table":"${OdsReservationTableName}","view":"ods_reservation_event"}]
-        '--enable-metrics': 'true'
-        '--enable-observability-metrics': 'true'
-
-  DwdPaidOrderJob:
-    Type: AWS::Glue::Job
-    Properties:
-      Name: !Sub '${ProjectName}-dwd-paid-order'
-      Role: !GetAtt GlueExecutionRole.Arn
-      GlueVersion: '5.0'
-      WorkerType: G.1X
-      NumberOfWorkers: 2
-      Timeout: 20
-      Command:
-        Name: glueetl
-        PythonVersion: '3'
-        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
-      DefaultArguments:
-        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
-        '--SQL_PATH': sql/dwd/20_dwd_paid_order.sql
-        '--OUTPUT_VIEW': dwd_paid_order
-        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dwd_paid_order'
-        '--INPUT_TABLES_JSON': !Sub |
-          [{"database":"${UpstreamOdsDatabase}","table":"${OdsOrderTableName}","view":"ods_order"}]
-        '--enable-metrics': 'true'
-        '--enable-observability-metrics': 'true'
 
   DmConversionJob:
     Type: AWS::Glue::Job
@@ -367,7 +313,11 @@ Resources:
         '--OUTPUT_VIEW': dm_reservation_conversion
         '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dm_reservation_conversion'
         '--INPUT_TABLES_JSON': !Sub |
-          [{"database":"reservation_dwd","table":"dwd_reservation_event","view":"dwd_reservation_event"},{"database":"reservation_dwd","table":"dwd_paid_order","view":"dwd_paid_order"},{"database":"${UpstreamDimDatabase}","table":"${DimCampaignTableName}","view":"dim_campaign"}]
+          [
+            {"database":"${UpstreamDwdDatabase}","table":"${DwdReservationTableName}","view":"dwd_reservation_event"},
+            {"database":"${UpstreamDwdDatabase}","table":"${DwdPaidOrderTableName}","view":"dwd_paid_order"},
+            {"database":"${UpstreamDimDatabase}","table":"${DimCampaignTableName}","view":"dim_campaign"}
+          ]
         '--enable-metrics': 'true'
         '--enable-observability-metrics': 'true'
 
@@ -423,26 +373,6 @@ Resources:
       Type: ON_DEMAND
       WorkflowName: !Ref AnalyticsWorkflow
       Actions:
-        - JobName: !Ref DwdReservationJob
-        - JobName: !Ref DwdPaidOrderJob
-
-  DmAfterDwdTrigger:
-    Type: AWS::Glue::Trigger
-    Properties:
-      Name: !Sub '${ProjectName}-dm-after-dwd'
-      Type: CONDITIONAL
-      WorkflowName: !Ref AnalyticsWorkflow
-      StartOnCreation: true
-      Predicate:
-        Logical: AND
-        Conditions:
-          - JobName: !Ref DwdReservationJob
-            State: SUCCEEDED
-            LogicalOperator: EQUALS
-          - JobName: !Ref DwdPaidOrderJob
-            State: SUCCEEDED
-            LogicalOperator: EQUALS
-      Actions:
         - JobName: !Ref DmConversionJob
 
   AdsAfterDmTrigger:
@@ -460,6 +390,7 @@ Resources:
       Actions:
         - JobName: !Ref AdsCampaignJob
         - JobName: !Ref AdsCrmJob
+
 
 
   WorkflowStarterRole:
@@ -500,7 +431,6 @@ Resources:
         ZipFile: |
           import json
           import os
-
           import boto3
 
           glue = boto3.client("glue")
@@ -516,8 +446,7 @@ Resources:
                   Name=os.environ["WORKFLOW_NAME"],
                   RunProperties={
                       "business_date": str(business_date),
-                      "upstream_event_id": str(event.get("id", "")),
-                      "upstream_event_source": str(event.get("source", ""))
+                      "upstream_event_id": str(event.get("id", ""))
                   }
               )
 
@@ -529,11 +458,11 @@ Resources:
                   })
               }
 
-  UpstreamDataReadyRule:
+  UpstreamDwdReadyRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub '${ProjectName}-upstream-data-ready'
-      Description: Start reservation analytics after upstream ODS and DIM are ready.
+      Name: !Sub '${ProjectName}-upstream-dwd-ready'
+      Description: Starts DM and ADS after upstream DWD and DIM are ready.
       State: ENABLED
       EventPattern:
         source:
@@ -543,7 +472,7 @@ Resources:
         detail:
           status:
             - SUCCEEDED
-          ods_ready:
+          dwd_ready:
             - true
           dim_ready:
             - true
@@ -560,14 +489,17 @@ Resources:
       FunctionName: !Ref WorkflowStarterFunction
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
-      SourceArn: !GetAtt UpstreamDataReadyRule.Arn
+      SourceArn: !GetAtt UpstreamDwdReadyRule.Arn
 
 Outputs:
   WorkflowName:
     Value: !Ref AnalyticsWorkflow
+
   OnDemandStartTriggerName:
     Value: !Ref OnDemandStartTrigger
-  UpstreamDataReadyRuleName:
-    Value: !Ref UpstreamDataReadyRule
+
+  UpstreamDwdReadyRuleName:
+    Value: !Ref UpstreamDwdReadyRule
+
   ArtifactBucket:
     Value: !Ref ArtifactBucket

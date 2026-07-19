@@ -1,45 +1,85 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Demo-only upstream ODS and DIM Glue Catalog resources for reservation analytics Version 2.
+Description: Demo upstream project owning ODS, DWD and DIM for Version 2 simulation.
 
 Parameters:
   ProjectName:
     Type: String
     Default: reservation-analytics
 
-  UpstreamDataBucket:
+  ArtifactBucket:
     Type: String
-    Description: Existing S3 bucket containing generated mock ODS and DIM Parquet files.
+    Description: Existing S3 bucket containing code, SQL and mock data.
 
 Resources:
-  DemoOdsDatabase:
+  UpstreamGlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-demo-upstream-glue-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: UpstreamDataAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub 'arn:aws:s3:::${ArtifactBucket}'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub 'arn:aws:s3:::${ArtifactBucket}/*'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                Resource: '*'
+
+  OdsDatabase:
     Type: AWS::Glue::Database
     Properties:
       CatalogId: !Ref AWS::AccountId
       DatabaseInput:
         Name: reservation_ods
-        Description: Demo upstream ODS database. In production this is owned by another project.
 
-  DemoDimDatabase:
+  DwdDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: reservation_dwd
+
+  DimDatabase:
     Type: AWS::Glue::Database
     Properties:
       CatalogId: !Ref AWS::AccountId
       DatabaseInput:
         Name: reservation_dim
-        Description: Demo upstream DIM database. In production this is owned by another project.
 
-  DemoOdsReservationTable:
+  OdsReservationTable:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: !Ref DemoOdsDatabase
+      DatabaseName: !Ref OdsDatabase
       TableInput:
         Name: ods_reservation_event
         TableType: EXTERNAL_TABLE
-        Parameters:
-          classification: parquet
-          EXTERNAL: 'TRUE'
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
         StorageDescriptor:
-          Location: !Sub 's3://${UpstreamDataBucket}/data/ods/ods_reservation_event/'
+          Location: !Sub 's3://${ArtifactBucket}/data/ods/ods_reservation_event/'
           InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
           OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
           SerdeInfo:
@@ -53,19 +93,17 @@ Resources:
             - {Name: reserve_time, Type: timestamp}
             - {Name: channel, Type: string}
 
-  DemoOdsOrderTable:
+  OdsOrderTable:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: !Ref DemoOdsDatabase
+      DatabaseName: !Ref OdsDatabase
       TableInput:
         Name: ods_order
         TableType: EXTERNAL_TABLE
-        Parameters:
-          classification: parquet
-          EXTERNAL: 'TRUE'
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
         StorageDescriptor:
-          Location: !Sub 's3://${UpstreamDataBucket}/data/ods/ods_order/'
+          Location: !Sub 's3://${ArtifactBucket}/data/ods/ods_order/'
           InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
           OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
           SerdeInfo:
@@ -78,19 +116,17 @@ Resources:
             - {Name: order_time, Type: timestamp}
             - {Name: order_status, Type: string}
 
-  DemoDimCampaignTable:
+  DimCampaignTable:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: !Ref DemoDimDatabase
+      DatabaseName: !Ref DimDatabase
       TableInput:
         Name: dim_campaign
         TableType: EXTERNAL_TABLE
-        Parameters:
-          classification: parquet
-          EXTERNAL: 'TRUE'
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
         StorageDescriptor:
-          Location: !Sub 's3://${UpstreamDataBucket}/data/dim/dim_campaign/'
+          Location: !Sub 's3://${ArtifactBucket}/data/dim/dim_campaign/'
           InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
           OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
           SerdeInfo:
@@ -102,8 +138,111 @@ Resources:
             - {Name: launch_start, Type: timestamp}
             - {Name: launch_end, Type: timestamp}
 
+  DwdReservationTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DwdDatabase
+      TableInput:
+        Name: dwd_reservation_event
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/curated/dwd_reservation_event/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: reservation_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: campaign_id, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: reserve_time, Type: timestamp}
+            - {Name: channel, Type: string}
+
+  DwdPaidOrderTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DwdDatabase
+      TableInput:
+        Name: dwd_paid_order
+        TableType: EXTERNAL_TABLE
+        Parameters: {classification: parquet, EXTERNAL: 'TRUE'}
+        StorageDescriptor:
+          Location: !Sub 's3://${ArtifactBucket}/curated/dwd_paid_order/'
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: order_id, Type: string}
+            - {Name: mid, Type: string}
+            - {Name: product_id, Type: string}
+            - {Name: site, Type: string}
+            - {Name: order_time, Type: timestamp}
+
+  UpstreamWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Name: !Sub '${ProjectName}-upstream-workflow'
+      Description: Demo workflow generating DWD from ODS.
+
+  DwdReservationJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-upstream-dwd-reservation-event'
+      Role: !GetAtt UpstreamGlueRole.Arn
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 20
+      Command:
+        Name: glueetl
+        PythonVersion: '3'
+        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
+      DefaultArguments:
+        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
+        '--SQL_PATH': sql/dwd/10_dwd_reservation_event.sql
+        '--OUTPUT_VIEW': dwd_reservation_event
+        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dwd_reservation_event'
+        '--INPUT_TABLES_JSON': '[{"database":"reservation_ods","table":"ods_reservation_event","view":"ods_reservation_event"}]'
+
+  DwdPaidOrderJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-upstream-dwd-paid-order'
+      Role: !GetAtt UpstreamGlueRole.Arn
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 20
+      Command:
+        Name: glueetl
+        PythonVersion: '3'
+        ScriptLocation: !Sub 's3://${ArtifactBucket}/code/glue_jobs/run_single_sql_job.py'
+      DefaultArguments:
+        '--CODE_BASE_PATH': !Sub 's3://${ArtifactBucket}/code'
+        '--SQL_PATH': sql/dwd/20_dwd_paid_order.sql
+        '--OUTPUT_VIEW': dwd_paid_order
+        '--OUTPUT_PATH': !Sub 's3://${ArtifactBucket}/curated/dwd_paid_order'
+        '--INPUT_TABLES_JSON': '[{"database":"reservation_ods","table":"ods_order","view":"ods_order"}]'
+
+  UpstreamStartTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub '${ProjectName}-upstream-on-demand-start'
+      Type: ON_DEMAND
+      WorkflowName: !Ref UpstreamWorkflow
+      Actions:
+        - JobName: !Ref DwdReservationJob
+        - JobName: !Ref DwdPaidOrderJob
+
 Outputs:
-  OdsDatabaseName:
-    Value: !Ref DemoOdsDatabase
-  DimDatabaseName:
-    Value: !Ref DemoDimDatabase
+  UpstreamWorkflowName:
+    Value: !Ref UpstreamWorkflow
+
+  UpstreamTriggerName:
+    Value: !Ref UpstreamStartTrigger
